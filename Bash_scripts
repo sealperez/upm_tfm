@@ -1,0 +1,155 @@
+#!/bin/bash
+
+## main working directory set to /home/sergio/TFM1
+mkdir /home/sergio/TFM1/
+
+## to unzip the folders containing the WGS output files (assemblies + quality reports) generated for Rosenbergiella isolates (courtesy of KU Leuven's Laboratory of Food Microbiology)
+for file in /home/sergio/TFM1/wgs/*.zip
+do
+	dir=$(echo "$(basename ${file%.*})")
+	unzip ${file} -d ${dir}
+done
+
+## to filter the assembly files to remove contigs of <=200 bp and move the output files to a new directory
+
+mkdir /home/sergio/TFM1/Rosenbergiella_genomes
+
+wgsfolder=/home/sergio/TFM1/wgs
+rbg=/home/sergio/TFM1/Rosenbergiella_genomes/
+
+bioawk -c fastx 'length($seq) >200 {print ">"$name"\n"$seq}' $wgsfolder/wgsresultsb1a/contigs_B1A.fasta > $rbg/Rosenbergiella_nectarea_B1A.fasta
+bioawk -c fastx 'length($seq) >200 {print ">"$name"\n"$seq}' $wgsfolder/wgsresultss61/contigs_s61.fasta > $rbg/Rosenbergiella_gaditana_S61.fasta
+bioawk -c fastx 'length($seq) >200 {print ">"$name"\n"$seq}' $wgsfolder/wgsresultss256/contigs_s256.fasta > $rbg/Rosenbergiella_epipactidis_S256.fasta
+bioawk -c fastx 'length($seq) >200 {print ">"$name"\n"$seq}' $wgsfolder/wgsresultss260/contigs_s260.fasta > $rbg/Rosenbergiella_collisarenosi_S260.fasta
+bioawk -c fastx 'length($seq) >200 {print ">"$name"\n"$seq}' $wgsfolder/wgsresultss264/contigs_s264.fasta > $rbg/Rosenbergiella_australiborealis_S264.fasta
+
+## to compress fasta files to .fasta.gz
+
+for file in $rbg/*.fasta
+do
+	gzip -c ${file} > ${file}.gz
+done
+
+## download reference genomes from NCBI using genomepy (python script in Jupyter notebook 'genomepy.ipynb')
+
+## preparation of a folder with the 106 genome assemblies in .fa files
+
+mkdir /home/sergio/TFM1/fasta
+fasta=/home/sergio/TFM1/fasta/
+rbg=/home/sergio/TFM1/Rosenbergiella_genomes/
+refgenomes=/home/sergio/TFM1/ncbi_genomes/
+cp $refgenomes/*/*.fa $fasta
+
+for assembly in $rbg/*.fasta
+do
+	genome=$(echo "$(basename ${assembly%.*})")
+	cat ${assembly} > $fasta/${genome}.fa
+done
+
+##### QUAST #####
+
+fasta=/home/sergio/TFM1/fasta/
+
+for assembly in $fasta/*.fa
+do
+	genome=$(echo "$(basename ${assembly%.*})")
+	quast.py -o /home/sergio/TFM1/quast_out/${genome} -m 200 --threads 16 ${assembly}
+done
+
+
+## analysis of Quast outputs using the script in Jupyter notebook 'analysis_QUAST_results.ipynb'
+
+
+##### CheckM #####
+
+fasta=/home/sergio/TFM1/fasta/
+checkm taxonomy_wf class Gammaproteobacteria -t 8 -x fa --tab_table $fasta /home/sergio/TFM1/checkm
+
+## analysis of CheckM outputs using the script in Jupyter notebook 'analysis_checkM_results.ipynb'
+
+
+##### PYANI #####
+
+fasta=/home/sergio/TFM1/fasta/
+average_nucleotide_identity.py -o /home/sergio/TFM1/pyani -i $fasta -v -g --write_excel
+
+average_nucleotide_identity.py -o /home/sergio/TFM1/pyani_tetra -i $fasta -m TETRA -v -g --write_excel
+
+## analysis of CheckM outputs and generation of ANI & TETRA heatmaps using the script in Jupyter notebook 'analysis_pyani_results.ipynb'
+
+
+##### CompareM #####
+
+fasta=/home/sergio/TFM1/fasta/
+comparem aai_wf $fasta /home/sergio/TFM1/comparem -e 0.000001 --cpus 8 --file_ext fa
+
+## analysis of CompareM outputs and generation of AAI & OF heatmaps using the script in Jupyter notebook 'analysis_comparem_results.ipynb'
+
+
+##### UBCG v3 #####
+# The last version of this software is available at //www.ezbiocloud.net/tools/ubcg
+# Unzip the UBCG.zip file in the desired directory (e.g. /home/sergio/TFM1/)
+
+fasta=/home/sergio/TFM1/fasta/
+ubcg=/home/sergio/TFM1/UBCG_v3/UBCG
+mkdir $ubcg/myfasta
+cp $fasta*.fa $ubcg/myfasta
+
+cd $ubcg
+for assembly in ./myfasta/*.fa
+do
+	genome=$(echo "$(basename ${assembly%.*})")
+	genus=$(echo "${genome}" | awk -F "_" '{ print $1 }')
+	species=$(echo "${genome}" | awk -F "_" '{ print $2 }')
+	printf "\n\n>>>>>> ANALYZING GENOME >>>>>> ${genus} ${species}\n\n"
+	java -jar UBCG.jar extract -bcg_dir bcg -i ${assembly} -label "${genus} ${species}" -taxon "${genus} ${species}"
+done
+
+
+java -jar UBCG.jar align -bcg_dir bcg -a codon -t 8 -prefix 20200426 -raxml
+
+
+##### PROKKA/ROARY 1 (all genomes, n = 106) #####
+
+fasta=/home/sergio/TFM1/fasta/
+
+for assembly in $fasta/*.fa
+do
+	genome=$(echo "$(basename ${assembly%.*})")
+	printf "\n\n>>>>>> ANALYZING GENOME >>>>>> ${genome}\n\n"
+	prokka ${assembly} --kingdom Bacteria --outdir /home/sergio/TFM1/prokka/prokka_${genome} --prefix ${genome}
+done
+
+mkdir /home/sergio/TFM1/prokka_summaries
+cp prokka/*/*.txt /home/sergio/TFM1/prokka_summaries
+
+## analysis of Prokka summary files using the script in Jupyter notebook 'analysis_prokka_results.ipynb'
+
+mkdir /home/sergio/TFM1/gffs
+gffs=/home/sergio/TFM1/gffs/
+cp /home/sergio/TFM1/prokka/*/*.gff $gffs
+
+roary -f /home/sergio/TFM1/roary -e -n -v -i 50 -cd 80 -g 100000 -p 8 -r $gffs/*.gff # Relaxed criteria: 50% sequence similarity & presence in 80% of genomes (Adeolu et al. 2016)
+
+## Gblocks filtering of the alignment of core gene sequences
+
+mkdir Gblocks
+cp /home/sergio/TFM1/roary/core_gene_alignment.aln Gblocks
+Gblocks /home/sergio/TFM1/Gblocks/core_gene_alignment.aln -t=d -b4=5 -b5=h
+
+## Generation of ML trees using IQ-TREE, as implemented in the CIPRES Science Gateway
+
+
+##### PROKKA/ROARY 2 (Rosenbergiella genomes, n = 6) #####
+
+mkdir /home/sergio/TFM1/Rbg_gffs
+Rbg_gffs=/home/sergio/TFM1/Rbg_gffs
+cp $gffs*Rosenbergiella* $Rbg_gffs
+
+roary -f /home/sergio/TFM1/roary_Rbg -e -n -v -i 95 -cd 100 -p 8 -r $Rbg_gffs/*.gff # Stringent criteria: 95% sequence similarity & presence in 100% of genomes
+
+## Generation of an ML tree using IQ-TREE
+
+iqtree -s /home/sergio/TFM1/roary_Rbg/core_gene_alignment.aln -m TEST -alrt 1000 -bb 1000 -nt 4
+
+
